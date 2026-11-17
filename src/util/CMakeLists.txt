@@ -12,6 +12,7 @@ set(INC_SYS
 set(SRC
   aligned_malloc.cpp
   colorspace.cpp
+  credit_meter.cpp
   debug.cpp
   guarded_allocator.cpp
   ies.cpp
@@ -58,6 +59,7 @@ set(SRC_HEADERS
   color.h
   colorspace.h
   concurrent_set.h
+  credit_meter.h
   concurrent_vector.h
   debug.h
   defines.h

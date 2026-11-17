@@ -18,6 +18,7 @@
 #include "session/display_driver.h"
 #include "session/tile.h"
 
+#include "util/credit_meter.h"
 #include "util/log.h"
 #include "util/progress.h"
 #include "util/scoped_defer.h"
@@ -170,7 +171,18 @@ void PathTrace::render(const RenderWork &render_work)
     render_cancel_.is_rendering = true;
   }
 
-  render_pipeline(render_work);
+  try {
+    render_pipeline(render_work);
+  }
+  catch (...) {
+    /* A stage that threw ends this render on this thread, so the cancellation bookkeeping must
+     * report the work as not running before the exception continues to the session that owns
+     * this thread; a wait that never saw the end would hang the host's own teardown. */
+    const thread_scoped_lock lock(render_cancel_.mutex);
+    render_cancel_.is_rendering = false;
+    render_cancel_.condition.notify_one();
+    throw;
+  }
 
   /* Indicate that rendering has finished, making it so thread which requested `cancel()` can carry
    * on. */
@@ -420,6 +432,12 @@ void PathTrace::path_trace(RenderWork &render_work)
   LOG_DEBUG << "Will path trace " << render_work.path_trace.num_samples
             << " samples at the resolution divider " << render_work.resolution_divider;
 
+  /* The paid preview is billed for this call's wall time once, not for the sum of the parallel
+   * threads it starts; the meter clips it by the authorization window the server granted. */
+  const CreditScope credit_scope(CreditStage::Sampling);
+
+  CreditMeter::get().run_stage_hook(CreditStage::Sampling);
+
   const double start_time = time_dt();
 
   const int num_works = path_trace_works_.size();
@@ -468,6 +486,9 @@ void PathTrace::adaptive_sample(RenderWork &render_work)
   if (!render_work.adaptive_sampling.filter) {
     return;
   }
+
+  /* Adaptive filtering is billable work of its own. */
+  const CreditScope credit_scope(CreditStage::Adaptive);
 
   bool did_reschedule_on_idle = false;
 
@@ -627,6 +648,9 @@ void PathTrace::denoise(const RenderWork &render_work)
   }
 
   LOG_DEBUG << "Perform denoising work.";
+
+  /* Denoising is billable work of its own. */
+  const CreditScope credit_scope(CreditStage::Denoise);
 
   const double start_time = time_dt();
 

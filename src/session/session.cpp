@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0 */
 
 #include <cstring>
+#include <exception>
 
 #include "device/cpu/device.h"
 #include "device/device.h"
@@ -288,7 +289,18 @@ void Session::thread_render()
     /* reset number of rendered samples */
     progress.reset_sample();
 
-    run_main_render_loop();
+    /* A stage that threw inside Cycles is this session's failed render, not a failed process: the
+     * error is reported on the progress the host reads, and this thread goes back to waiting for
+     * its next work instead of letting the exception end the host. */
+    try {
+      run_main_render_loop();
+    }
+    catch (const std::exception &exception) {
+      progress.set_error(exception.what());
+    }
+    catch (...) {
+      progress.set_error("Rendering failed without reporting a reason.");
+    }
   }
 
   profiler.stop();
